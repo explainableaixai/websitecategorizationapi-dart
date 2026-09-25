@@ -1,159 +1,140 @@
-# Website Categorization API for Dart and Flutter
+# websitecategorizationapi
 
-`websitecategorizationapi` is the Dart and Flutter general website content-classification client for [Website Categorization API](https://www.websitecategorizationapi.com). It gives applications a small, typed interface for a production data service while keeping authentication, URL construction, response decoding, retries, and error handling out of business logic.
+Give it a web page, get back what the page is about. `websitecategorizationapi` is the Dart client for [IAB content categories for any web page](https://www.websitecategorizationapi.com), built for publishers, ad platforms and analytics teams who need topic labels without running their own classifier.
 
-Analytics, advertising, moderation, and enrichment workflows need a consistent description of what a website is about without downloading and interpreting every page inside the application itself. The service draws on a database of more than 120 million categorized domains and exposes broad and detailed IAB content labels suitable for individual lookups and batch enrichment.
+## Setup
 
-This package is designed as a real client library rather than a collection of copied HTTP examples. It supports the normal lifecycle of a lookup: validate input, send the API key in the expected header, apply a bounded timeout, decode a successful response, distinguish authentication and quota failures, and expose response fields without discarding information that may be needed later. It fits content enrichment, contextual advertising, analytics segmentation, catalogue normalization and other applications where the decision must be repeatable and auditable.
-
-## Installation
-
-Install the published package from pub.dev:
-
-```text
+```bash
 dart pub add websitecategorizationapi
 ```
 
-Store the API key outside source control. Examples use `AQ_API_KEY`, but production applications can obtain the value from their established secret manager. Never place a working key in a README, test fixture, command history, mobile bundle, browser-delivered JavaScript, or committed configuration file.
-
-## Quick start
+Create a client once and reuse it:
 
 ```dart
 import 'package:websitecategorizationapi/websitecategorizationapi.dart';
 
-Future<void> main() async {
-  final client = WebsiteCategorizationAPIClient(apiKey: const String.fromEnvironment('AQ_API_KEY'));
-  final result = await client.classify('https://www.example.com/article');
-  print(result.toJson());
+final wca = WebsiteCategorizationAPIClient(apiKey: key);
+```
+
+## Classifying an article
+
+```dart
+final r = await wca.classify('https://example.com/article');
+for (final c in (r['categories'] as List? ?? const [])) {
+  print('${c['tier']}  ${c['name']}  ${c['confidence']}');
 }
 ```
 
-The client returns a structured result containing IAB content categories, confidence scores, detected language, and credit balance. It does not turn a nuanced response into an unexplained boolean unless a convenience method explicitly promises that behavior. Keeping the full result makes logs useful, allows a policy to evolve without repeating a lookup, and gives an operator enough context to understand why an action was taken.
+The documented response has a `categories` list. Each entry carries an `id`, a `name`, a `tier` and a `confidence`. A `meta` block holds the `request_id` and `processing_time_ms`, which help when you report a problem. See the API docs on the website for the full reference.
 
-## What the client handles
+Pass a full article URL when the page matters, and a bare domain when you want the site as a whole. A sports section and a recipe page on the same news site deserve different labels, and the URL form gives you that.
 
-The package owns transport concerns that should behave consistently across a codebase. It normalizes inputs only where the service contract allows normalization, attaches the API key without putting it in a query string, sends a descriptive user agent, negotiates JSON, checks status codes before decoding success models, and retains the response body on service errors. A caller should be able to catch an authentication problem separately from a quota limit, a malformed request, a temporary server failure, or a local network timeout.
+## Tiers, briefly
 
-Retries are intentionally conservative. Network interruptions, `429` responses with a usable delay, and selected `5xx` responses may be retried with bounded backoff. Invalid input and authentication failures are not retried because another identical request cannot repair them. Applications performing large batches should add their own pacing, concurrency limit, cancellation, and checkpointing around the client instead of starting an unbounded number of requests.
+The IAB content taxonomy is a tree. Tier 1 is broad, for example Sports. Deeper tiers narrow it, for example Soccer under Sports. Advertisers often target at tier 1 or 2, while brand safety teams care about specific deep nodes. Keep all tiers in storage and choose the depth at query time. You cannot recover detail you threw away.
 
-The default endpoint is suitable for normal hosted use, while a configurable base URL makes integration tests and licensed on-premises deployments possible. Timeout and retry values are configurable at client construction. Configuration is immutable after construction so the same instance can be shared safely according to normal Dart and Flutter conventions.
+## Worked example: contextual targeting
 
-## Response model
+A publisher wants to send its ad server one or two topic keys per page, without cookies. At publish time:
 
-The public model mirrors useful service data and leaves room for additive fields. Unknown JSON properties should not make an otherwise valid response fail. New package versions may add typed accessors when the service adds fields, but callers that retain the raw response can adopt new data without waiting for a library release.
+```dart
+Future<List<String>> topicKeys(String articleUrl) async {
+  final r = await wca.classify(articleUrl);
+  final cats = (r['categories'] as List? ?? const [])
+      .cast<Map<String, dynamic>>()
+      .where((c) => (c['confidence'] as num? ?? 0) >= 0.5)
+      .toList()
+    ..sort((a, b) =>
+        (b['confidence'] as num).compareTo(a['confidence'] as num));
+  return cats.take(2).map((c) => c['id'].toString()).toList();
+}
+```
 
-| Field | Purpose |
+Store the keys with the article. The ad call then carries them as key-values, and campaigns target topics instead of people. Classify once per article and again only when the text changes, not on every page view.
+
+## Worked example: auditing where links go
+
+A content team wants to know what kinds of sites its outbound links point to. Collect the URLs, classify the unique domains, and count:
+
+```dart
+final counts = <String, int>{};
+for (final domain in uniqueDomains) {
+  final r = await wca.classify(domain);
+  final cats = r['categories'] as List? ?? const [];
+  final name = cats.isEmpty ? 'Unclassified' : cats.first['name'];
+  counts[name] = (counts[name] ?? 0) + 1;
+}
+```
+
+A few hundred calls give a clear picture of the link profile, and odd categories stand out quickly.
+
+## Worked example: a Flutter reading app
+
+Apps that save articles for later can group them by topic automatically. Do the classification on your server, not in the app, so the key stays private:
+
+1. The app sends the saved URL to your backend.
+2. The backend calls `classify` and stores the categories with the item.
+3. The app shows shelves by tier 1 category.
+
+The same client runs on the backend, since it depends only on `package:http`.
+
+## Choosing a confidence threshold
+
+Every category comes with a confidence value between 0 and 1. There is no single right cut-off:
+
+- **Targeting** can use a moderate threshold, around 0.5. A slightly wrong topic costs little.
+- **Brand safety** should look at sensitive categories even at lower confidence. Missing an unsafe page costs more than a false alarm.
+- **Reporting** works best with the top category only, so every page counts once.
+
+Log the full list anyway. When a campaign underperforms, the lower-ranked categories often explain why.
+
+## Pages that are hard to classify
+
+Some pages carry little text: image galleries, login walls, single-page apps that render everything in the browser, and parked domains. The classifier falls back on whatever it can read, and for thin pages that may be the site as a whole. If a URL returns weak or generic categories, try the bare domain, or classify a text-rich page on the same site and reuse its labels.
+
+## Behaviour you should know about
+
+- **One request per call.** The package has no batch method. Loop, or run a few calls in parallel with `Future.wait`.
+- **No retries or caching.** Add them in your code where they make sense. Cache by URL, and expire entries when the page changes.
+- **Key in the body.** The endpoint takes the key as a form field, and the client sends it that way over HTTPS.
+- **Timeout.** 30 seconds by default, configurable in the constructor.
+
+## Exceptions
+
+| Type | Cause |
 |---|---|
-| `query` | Preserved from the service response for typed access, logging, or policy decisions. |
-| `classification` | Preserved from the service response for typed access, logging, or policy decisions. |
-| `category` | Preserved from the service response for typed access, logging, or policy decisions. |
-| `confidence` | Preserved from the service response for typed access, logging, or policy decisions. |
-| `language` | Preserved from the service response for typed access, logging, or policy decisions. |
-| `remaining_credits` | Preserved from the service response for typed access, logging, or policy decisions. |
-| `total_credits` | Preserved from the service response for typed access, logging, or policy decisions. |
+| `ArgumentError` | Empty key or empty URL |
+| `AuthenticationException` | 401 or 403, which means a bad key or no quota left |
+| `RateLimitException` | 429 |
+| `ApiException` | Other HTTP errors or a non-object JSON reply |
 
-Applications should record the query, result, decision, and request time in their own audit log. They should not record the API key. If results contain URLs or domains derived from user activity, apply the same retention and access controls used for the originating DNS, proxy, firewall, browser, or analytics data.
+`AuthenticationException` and `RateLimitException` are subclasses of `ApiException`, so a single `on ApiException` clause catches all three.
 
-## Integration pattern: request-time decision
+## Testing
 
-For interactive use, create one client during application startup and reuse it. Read the key and configuration once, validate that required values exist, then inject the client into the service that needs classifications. Reuse allows the underlying HTTP implementation to pool connections and makes global timeout and retry behavior predictable.
+```dart
+final wca = WebsiteCategorizationAPIClient(
+  apiKey: 'x',
+  httpClient: MockClient((_) async => http.Response(
+      '{"categories":[{"id":"483","name":"Sports","tier":1,"confidence":0.91}]}',
+      200)),
+);
+```
 
-Keep the policy separate from the lookup. The package reports service facts; the application decides what those facts mean for a user, tenant, network segment, or agent. That separation makes it possible to run in observation mode, compare proposed decisions with existing controls, and change a policy without replacing the transport layer.
+## Related data
 
-When a lookup is on a critical request path, define failure behavior before deployment. Security controls commonly fail closed or send an indeterminate result to review. Analytics enrichment commonly fails open and records a missing classification for later repair. There is no universal answer, but silently treating a timeout as a positive result is rarely defensible.
+Topic labels answer "what is this page about". Other questions need other data:
 
-## Integration pattern: batch processing
+- Is the site an AI product? A register of AI tools can [flag AI tools inside categorized traffic](https://www.aitoolsblocklist.com) that a topic taxonomy files under technology.
+- Who in a company uses AI, and how much? Compliance teams build [an AI usage inventory for compliance teams](https://www.shadowaitools.com) from existing network logs.
+- If your own software agents browse the web, [a guard for agents that click and type](https://www.aiagentallowlist.com) stop them before sensitive pages.
 
-Batch jobs should remove duplicate inputs before making requests, preserve the original-to-normalized mapping, and save progress in restartable chunks. Use a small concurrency limit rather than one worker per row. Read quota information from every successful response and stop cleanly before exhaustion so a scheduled job can report what remains instead of producing a half-explained failure.
+## Other clients
 
-A useful output record contains the original value, normalized value, lookup timestamp, package version, primary result, full category or policy data, and any error code. That record is adequate for later reconciliation and lets analysts distinguish “not found” from “not checked.” If the service data changes over time, the timestamp also makes clear which decision basis was available at the time.
-
-Cache only for a period appropriate to the product. A short process-local cache eliminates repeated calls during one job. A longer shared cache can reduce cost, but it must include enough context in the key and must not outlive the organization’s tolerance for stale classifications. Do not cache authentication, malformed-request, or transient server errors as if they were valid negative answers.
-
-## Operational guidance
-
-Use explicit timeouts at every layer. The HTTP timeout protects a single attempt, while an application deadline protects the complete operation including retries. Propagate cancellation from incoming requests and job supervisors. Emit metrics for total lookups, latency, success, status-code family, retries, cache hits, and remaining quota. Alert on sustained authentication errors, an unexpected increase in indeterminate results, or a quota trajectory that will reach zero before renewal.
-
-Pin a compatible major version in application dependencies and test upgrades in staging. Package releases use semantic versioning: patch releases repair behavior without changing the public contract, minor releases add compatible capabilities, and major releases may require source changes. Service responses can gain fields independently, so decoders are forward-compatible and callers should avoid exhaustive assumptions about future enum values.
-
-For regulated or security-sensitive deployments, retain the package version and policy version with every decision. A later review should be able to answer which code interpreted the response, which rule consumed it, and what the service returned. This is more valuable than a log line containing only “allowed” or “blocked.”
-
-## Errors
-
-The client distinguishes configuration errors raised before a request, invalid-input responses, authentication failures, exhausted quota or authorization failures, rate limits, transport timeouts, server failures, and response-decoding problems. Error values include an HTTP status when one exists and a safely bounded response body for diagnostics. Secrets are never included in an error message.
-
-Callers should handle known service errors explicitly and place a final handler around unexpected transport failures. Batch workflows can attach an error to an individual row and continue when appropriate. Authentication failures should normally stop the batch because every remaining request would fail. Rate limits should pause according to server guidance. Invalid rows can be quarantined for correction.
-
-## Security and privacy
-
-Use TLS verification and do not add a “disable certificate checks” option to production configuration. Restrict API keys by environment and product where the account system permits it. Rotate a key immediately if it appears in a package, repository, build log, support ticket, or client-side application. A deleted Git commit does not make an exposed key secret again.
-
-Minimize data sent to the service. Submit only the domain, URL, method, or file-derived hostname required by the documented operation. For log-analysis workflows, normalize and deduplicate locally before lookup. Do not attach cookies, page contents, user identifiers, authorization headers from the originating request, or unrelated log columns.
-
-## Why a maintained SDK helps
-
-Direct HTTP calls are easy for the first successful example and expensive at the edges. Six teams can otherwise invent six interpretations of timeouts, retries, missing fields, normalization, user agents, and quota failures. A maintained package gives those decisions one reviewed implementation and gives downstream applications a stable model even as internal transport details improve.
-
-An ecosystem-native package also makes discovery and evaluation easier. Users can inspect its license, release history, documentation, dependencies, source, and examples using familiar tools. They can pin a version, run dependency auditing, generate API documentation, and compare changes before upgrading. The README is part of that interface: it explains not just which method to call, but how the result belongs in an operational system.
-
-## Related implementations for the same product
-
-Use the implementation that matches the deployment environment. These repositories and registry pages all focus on Website Categorization API rather than unrelated products:
-
-- [Original repository](https://github.com/explainableaixai/websitecategorizationapi)
-- [Composer repository](https://github.com/optimiser4/websitecategorizationapi)
-- [npm client](https://www.npmjs.com/package/websitecategorization)
-- [Python client](https://pypi.org/project/websiteclassificationapi/)
-- [Rust client](https://crates.io/crates/websitecategorizationapi)
-- [PHP client](https://packagist.org/packages/websitecategorization/websitecategorizationapi)
-
-The implementations share service concepts but follow the conventions of their languages. Method names, async models, error hierarchies, and packaging layouts are intentionally native rather than forced into a byte-for-byte common shape.
-
-## Companion data services
-
-The following links connect this package to complementary layers used in broader governance and classification systems. Each description identifies a distinct job rather than repeating a product name:
-
-- [Dart and Flutter port of Website Categorization API, backed by AI Tools Blocklist](https://www.aitoolsblocklist.com)
-- [Dart and Flutter workflow for exposing unapproved AI adoption alongside Website Categorization API](https://www.shadowaitools.com)
-- [Dart and Flutter companion data for content routing within Website Categorization API deployments](https://www.urlcategorizationdatabase.com)
-- [Dart and Flutter enrichment layer connecting Website Categorization API with parental controls](https://www.webfilteringdatabase.com)
-
-These services solve different questions. AI-service recognition identifies tools in network traffic. Shadow-AI analysis turns existing logs into an inventory. Agent URL policy evaluates the page an autonomous browser wants to reach. Content classification describes what a site is about, and filtering classification maps a site to network-policy categories. Combining them should be an explicit architecture decision, not an assumption that one verdict substitutes for another.
-
-## Standards and further reading
-
-- [IAB Tech Lab Content Taxonomy](https://iabtechlab.com/standards/content-taxonomy/)
-- [RFC 3986 URI syntax](https://www.rfc-editor.org/rfc/rfc3986)
-- [W3C web standards](https://www.w3.org/standards/)
-
-These references provide vocabulary and control objectives; they do not endorse this package. Map the client’s output to the organization’s own risk assessment, legal duties, acceptable-use rules, and incident process.
-
-## Frequently asked questions
-
-### Does the package include the underlying database?
-
-No. The normal package is a client and contains no bulk commercial dataset. It sends documented lookup inputs to the hosted service and returns structured results. Where an offline database licence is available, the same client interface can be adapted to an internal endpoint so application policy does not have to change.
-
-### Should I create a new client for every lookup?
-
-No. Construct one client for an application or worker and reuse it. This keeps configuration consistent and allows connection pooling. Create separate clients only when endpoints, credentials, tenants, or materially different timeout policies require isolation.
-
-### Can I use the result as a permanent fact?
-
-Treat classifications and policy findings as dated intelligence. Websites change purpose, vendors revise terms, new page types appear, and threat or governance policy evolves. Store the lookup time and refresh data according to the consequence of staleness.
-
-### What should happen when the service is unavailable?
-
-Choose behavior based on the calling system’s risk. A security gate can deny or require review. An enrichment pipeline can retain the row as pending. Whatever the choice, make it explicit, observable, and tested. Do not convert an infrastructure failure into a confident classification.
-
-### Is batch processing one API call?
-
-The convenience batch method coordinates individual lookups unless the product documentation explicitly describes a bulk endpoint. Each item can consume quota. Deduplicate inputs, pace work, monitor the returned balance, and checkpoint output.
-
-### How should I contribute?
-
-Open an issue in the source repository with the package version, runtime version, a minimal reproduction, expected behavior, and sanitized response details. Never include a working API key or private network log. Changes should include tests and update public documentation when behavior changes.
+- [websitecategorization on npm](https://www.npmjs.com/package/websitecategorization)
+- [websitecategorizationapi crate](https://crates.io/crates/websitecategorizationapi)
+- [websitecategorization/websitecategorizationapi on Packagist](https://packagist.org/packages/websitecategorization/websitecategorizationapi)
 
 ## License
 
-MIT. The package licence covers the client source. Access to hosted APIs, downloadable datasets, and commercial data remains governed by the applicable service plan and terms.
+MIT. IAB and the Content Taxonomy are trademarks of IAB Technology Laboratory, mentioned here only to describe compatibility.
