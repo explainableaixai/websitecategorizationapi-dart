@@ -125,7 +125,7 @@ final wca = WebsiteCategorizationAPIClient(
 
 Topic labels answer "what is this page about". Other questions need other data:
 
-- Is the site an AI product? [AI content filtering systems](https://www.aitoolsblocklist.com) rely on a register of AI tools, which catches what a topic taxonomy files under technology.
+- Is the site an AI product? [AI content filtering systems](https://www.aitoolsblocklist.com/ai-category-data-dns-filtering.php) rely on a register of AI tools, which catches what a topic taxonomy files under technology.
 - Who in a company uses AI, and how much? Compliance teams run [shadow AI detection software](https://www.shadowaitools.com/for-compliance-officers.php) over existing network logs.
 - If your own software agents browse the web, an [AI agent allow list API](https://www.aiagentallowlist.com/api-docs.php) stops them before sensitive pages.
 
