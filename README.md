@@ -1,6 +1,6 @@
 # websitecategorizationapi
 
-Give it a web page, get back what the page is about. `websitecategorizationapi` is the Dart client for [IAB content categories for any web page](https://www.websitecategorizationapi.com), built for publishers, ad platforms and analytics teams who need topic labels without running their own classifier.
+Give it a web page, get back what the page is about. `websitecategorizationapi` is the Dart client for the [website category API](https://www.websitecategorizationapi.com), built for publishers, ad platforms and analytics teams who need topic labels without running their own classifier.
 
 ## Setup
 
@@ -125,9 +125,9 @@ final wca = WebsiteCategorizationAPIClient(
 
 Topic labels answer "what is this page about". Other questions need other data:
 
-- Is the site an AI product? A register of AI tools can [flag AI tools inside categorized traffic](https://www.aitoolsblocklist.com) that a topic taxonomy files under technology.
-- Who in a company uses AI, and how much? Compliance teams build [an AI usage inventory for compliance teams](https://www.shadowaitools.com) from existing network logs.
-- If your own software agents browse the web, [a guard for agents that click and type](https://www.aiagentallowlist.com) stop them before sensitive pages.
+- Is the site an AI product? [AI content filtering systems](https://www.aitoolsblocklist.com/ai-category-data-dns-filtering.php) rely on a register of AI tools, which catches what a topic taxonomy files under technology.
+- Who in a company uses AI, and how much? Compliance teams run [shadow AI detection software](https://www.shadowaitools.com/for-compliance-officers.php) over existing network logs.
+- If your own software agents browse the web, an [AI agent allow list API](https://www.aiagentallowlist.com/api-docs.php) stops them before sensitive pages.
 
 ## Other clients
 
